@@ -210,7 +210,7 @@ export async function POST(req: NextRequest) {
 
     // 6) Save to Mongo
     const mongoClient = await clientPromise
-    const db = mongoClient.db("sprout")
+    const db = mongoClient.db("drone")
     const mintedCollection = db.collection("mintednfts")
 
     await mintedCollection.insertOne({

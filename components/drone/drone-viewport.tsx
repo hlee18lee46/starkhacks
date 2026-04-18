@@ -19,7 +19,7 @@ type CameraMode = 'follow' | 'orbit' | 'fpv' | 'top'
 
 function SceneRenderer() {
   const { currentScene } = useDrone()
-  
+
   switch (currentScene) {
     case 'urban':
       return <UrbanScene />
@@ -33,18 +33,16 @@ function SceneRenderer() {
 }
 
 function KeyboardControls() {
-  const { setIMUData, takeoff, land, setCurrentScene, triggerButton, addEventLog, droneState } = useDrone()
-  const { gameState } = useGame()
+  const { setIMUData, takeoff, land, setCurrentScene, triggerButton, droneState } = useDrone()
   const keysPressed = useRef<Set<string>>(new Set())
-  
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
       keysPressed.current.add(key)
-      
-      // Prevent space from scrolling
+
       if (key === ' ') e.preventDefault()
-      
+
       switch (key) {
         case ' ':
           if (!droneState.isFlying) {
@@ -72,45 +70,45 @@ function KeyboardControls() {
           break
       }
     }
-    
+
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
       keysPressed.current.delete(key)
     }
-    
-    // Continuous input update loop
+
     const inputLoop = setInterval(() => {
-      let pitch = 0, roll = 0, yaw = 0
-      
+      let pitch = 0
+      let roll = 0
+      let yaw = 0
+
       if (keysPressed.current.has('w')) pitch = 25
       if (keysPressed.current.has('s')) pitch = -25
       if (keysPressed.current.has('a')) roll = -25
       if (keysPressed.current.has('d')) roll = 25
       if (keysPressed.current.has('q')) yaw = -30
       if (keysPressed.current.has('e')) yaw = 30
-      
-      // Throttle controls for altitude
+
       if (keysPressed.current.has('r')) {
-        setIMUData({ accelZ: 12 }) // Climb
+        setIMUData({ accelZ: 12 })
       } else if (keysPressed.current.has('f')) {
-        setIMUData({ accelZ: 7 }) // Descend
+        setIMUData({ accelZ: 7 })
       } else {
-        setIMUData({ accelZ: 9.81 }) // Hover
+        setIMUData({ accelZ: 9.81 })
       }
-      
+
       setIMUData({ pitch, roll, yaw })
     }, 16)
-    
+
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
-    
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
       clearInterval(inputLoop)
     }
   }, [setIMUData, takeoff, land, setCurrentScene, triggerButton, droneState.isFlying])
-  
+
   return null
 }
 
@@ -126,11 +124,10 @@ function LoadingFallback() {
 function SceneContent({ cameraMode }: { cameraMode: CameraMode }) {
   return (
     <>
-      {/* Camera setup based on mode */}
       {cameraMode === 'orbit' ? (
         <>
           <PerspectiveCamera makeDefault position={[15, 12, 15]} fov={60} />
-          <OrbitControls 
+          <OrbitControls
             enablePan={true}
             enableZoom={true}
             enableRotate={true}
@@ -146,13 +143,12 @@ function SceneContent({ cameraMode }: { cameraMode: CameraMode }) {
           <CameraController mode={cameraMode} />
         </>
       )}
-      
-      {/* Lighting */}
+
       <ambientLight intensity={0.4} />
-      <directionalLight 
-        position={[30, 50, 20]} 
-        intensity={1.2} 
-        castShadow 
+      <directionalLight
+        position={[30, 50, 20]}
+        intensity={1.2}
+        castShadow
         shadow-mapSize={[4096, 4096]}
         shadow-camera-far={150}
         shadow-camera-left={-50}
@@ -163,13 +159,11 @@ function SceneContent({ cameraMode }: { cameraMode: CameraMode }) {
       <pointLight position={[-20, 15, -20]} intensity={0.4} color="#00d4ff" />
       <pointLight position={[20, 15, 20]} intensity={0.3} color="#ff4400" />
       <hemisphereLight args={['#1a1a3a', '#0a0a15', 0.3]} />
-      
-      {/* Scene content */}
+
       <SceneRenderer />
       <DroneModel />
       <WaypointSystem />
-      
-      {/* Environment */}
+
       <Stars radius={200} depth={100} count={3000} factor={5} saturation={0} fade speed={0.5} />
       <Environment preset="night" />
     </>
@@ -178,36 +172,129 @@ function SceneContent({ cameraMode }: { cameraMode: CameraMode }) {
 
 export function DroneViewport() {
   const [cameraMode, setCameraMode] = useState<CameraMode>('follow')
-  const { currentScene } = useDrone()
+  const [sceneCanvas, setSceneCanvas] = useState<HTMLCanvasElement | null>(null)
+  const [isMinting, setIsMinting] = useState(false)
+
+  const { currentScene, droneState, addEventLog } = useDrone()
   const { generateWaypoints } = useGame()
-  
-  // Generate waypoints when scene changes
+
   useEffect(() => {
     generateWaypoints(currentScene)
   }, [currentScene, generateWaypoints])
-  
+
+  async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error('Failed to capture scene canvas'))
+          return
+        }
+        resolve(blob)
+      }, 'image/png')
+    })
+  }
+
+  async function captureSceneAndMint(canvas: HTMLCanvasElement) {
+    try {
+      setIsMinting(true)
+      addEventLog('info', 'Capturing game scene for NFT mint')
+      console.log('📸 Starting scene capture')
+
+      const blob = await canvasToBlob(canvas)
+      console.log('📸 Canvas blob created:', blob)
+
+      const formData = new FormData()
+      formData.append(
+        'image',
+        new File([blob], 'scene.png', { type: 'image/png' })
+      )
+      formData.append(
+        'recipientWallet',
+        '4XQUxCBZ7njW2Zw5SVWL199SfVn5xrHENpr4KagzYM3d'
+      )
+      formData.append('name', 'Drone Inspection Snapshot')
+      formData.append('symbol', 'DRONE')
+      formData.append(
+        'description',
+        'Captured during drone simulation building inspection'
+      )
+      formData.append('projectName', 'Drone Simulation')
+      formData.append('sceneName', currentScene)
+      formData.append('issueType', 'manual-capture')
+      formData.append('capturedAt', new Date().toISOString())
+
+      formData.append('dronePosX', String(droneState.position.x))
+      formData.append('dronePosY', String(droneState.position.y))
+      formData.append('dronePosZ', String(droneState.position.z))
+
+      formData.append('droneRotPitch', String(droneState.rotation.pitch))
+      formData.append('droneRotRoll', String(droneState.rotation.roll))
+      formData.append('droneRotYaw', String(droneState.rotation.yaw))
+
+      console.log('🚀 Sending scene.png to /api/scene/capture-and-mint')
+
+      const response = await fetch('/api/scene/capture-and-mint', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const result = await response.json()
+
+      console.log('🧾 FULL CAPTURE-AND-MINT RESULT:', result)
+      console.log('🧾 FULL RESULT JSON:\n', JSON.stringify(result, null, 2))
+
+      if (!response.ok || !result.ok) {
+        console.error('❌ Capture-and-mint failed:', result)
+        throw new Error(result?.error || 'Capture-and-mint failed')
+      }
+
+      console.log('✅ NFT MINT SUCCESS')
+      console.log('Mint Address:', result.mintAddress)
+      console.log('Signature:', result.signature)
+      console.log('Explorer:', result.explorer)
+      console.log('Image URL:', result.imageUrl)
+      console.log('Metadata URI:', result.metadataUri)
+      console.log('Saved Scene Path:', result.savedScenePath)
+
+      addEventLog('success', 'NFT minted successfully')
+      addEventLog('info', `Mint: ${result.mintAddress}`)
+      addEventLog('info', `Explorer: ${result.explorer}`)
+      addEventLog('info', `Image: ${result.imageUrl}`)
+    } catch (error: any) {
+      console.error('❌ Failed to capture and mint scene:', error)
+      addEventLog('error', error?.message || 'Failed to capture and mint scene')
+    } finally {
+      setIsMinting(false)
+    }
+  }
+
   const cameraModes: { mode: CameraMode; icon: React.ReactNode; label: string }[] = [
     { mode: 'follow', icon: <Video className="w-4 h-4" />, label: 'Follow' },
     { mode: 'fpv', icon: <Eye className="w-4 h-4" />, label: 'FPV' },
     { mode: 'top', icon: <MapPin className="w-4 h-4" />, label: 'Top' },
     { mode: 'orbit', icon: <Camera className="w-4 h-4" />, label: 'Orbit' },
   ]
-  
+
   return (
     <div className="relative w-full h-full rounded-xl overflow-hidden border border-border/50 bg-background">
-      {/* Glow effect */}
       <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-primary/5 pointer-events-none z-10" />
-      
-      <Canvas shadows gl={{ antialias: true, alpha: false }} className="w-full h-full">
+
+      <Canvas
+        shadows
+        gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
+        className="w-full h-full"
+        onCreated={({ gl }) => {
+          console.log('🎨 Canvas ready:', gl.domElement)
+          setSceneCanvas(gl.domElement)
+        }}
+      >
         <Suspense fallback={<LoadingFallback />}>
           <SceneContent cameraMode={cameraMode} />
         </Suspense>
       </Canvas>
-      
-      {/* Game HUD */}
+
       <GameHUD />
-      
-      {/* Camera mode selector */}
+
       <div className="absolute top-4 left-4 z-20">
         <div className="flex flex-col gap-1 bg-background/80 backdrop-blur-sm border border-border rounded-lg p-1">
           {cameraModes.map(({ mode, icon, label }) => (
@@ -224,18 +311,34 @@ export function DroneViewport() {
           ))}
         </div>
       </div>
-      
-      {/* Keyboard handler (outside Canvas) */}
+
+      <div className="absolute top-4 right-4 z-20">
+        <Button
+          size="sm"
+          disabled={!sceneCanvas || isMinting}
+          onClick={() => {
+            if (!sceneCanvas) {
+              console.log('❌ No canvas yet')
+              addEventLog('error', 'No canvas available yet')
+              return
+            }
+
+            captureSceneAndMint(sceneCanvas)
+          }}
+        >
+          {isMinting ? 'Minting...' : 'Capture & Mint'}
+        </Button>
+      </div>
+
       <KeyboardControls />
-      
-      {/* Corner decorations */}
+
       <div className="absolute top-0 left-0 w-12 h-12 border-l-2 border-t-2 border-primary/50 pointer-events-none" />
       <div className="absolute top-0 right-0 w-12 h-12 border-r-2 border-t-2 border-primary/50 pointer-events-none" />
       <div className="absolute bottom-0 left-0 w-12 h-12 border-l-2 border-b-2 border-primary/50 pointer-events-none" />
       <div className="absolute bottom-0 right-0 w-12 h-12 border-r-2 border-b-2 border-primary/50 pointer-events-none" />
-      
-      {/* Scan lines effect */}
-      <div className="absolute inset-0 pointer-events-none z-[5] opacity-[0.03]"
+
+      <div
+        className="absolute inset-0 pointer-events-none z-[5] opacity-[0.03]"
         style={{
           backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,212,255,0.1) 2px, rgba(0,212,255,0.1) 4px)'
         }}
