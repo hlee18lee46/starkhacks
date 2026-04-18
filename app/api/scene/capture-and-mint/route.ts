@@ -2,9 +2,6 @@ import { NextRequest, NextResponse } from "next/server"
 import axios from "axios"
 import FormData from "form-data"
 import bs58 from "bs58"
-import fs from "fs"
-import path from "path"
-import os from "os"
 import clientPromise from "@/lib/mongodb"
 
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults"
@@ -93,21 +90,13 @@ export async function POST(req: NextRequest) {
 
     const normalizedGateway = pinataGateway.replace(/\/+$/, "")
 
-    // 1) Save uploaded screenshot as scene.png on server
+    // 1) Prepare uploaded screenshot buffer
     const imageBytes = await imageFile.arrayBuffer()
     const imageBuffer = Buffer.from(imageBytes)
 
-    const screenshotsDir = path.join(os.tmpdir(), "drone-scene-captures")
-    fs.mkdirSync(screenshotsDir, { recursive: true })
-
-    const sceneFileName = `scene-${Date.now()}.png`
-    const savedScenePath = path.join(screenshotsDir, sceneFileName)
-
-    fs.writeFileSync(savedScenePath, imageBuffer)
-
-    // 2) Upload saved scene.png to Pinata
+    // 2) Upload scene image to Pinata directly from memory (avoids blocking fs I/O)
     const pinataFileForm = new FormData()
-    pinataFileForm.append("file", fs.createReadStream(savedScenePath), {
+    pinataFileForm.append("file", imageBuffer, {
       filename: "scene.png",
       contentType: "image/png",
     })
@@ -242,8 +231,6 @@ export async function POST(req: NextRequest) {
       metadataCID,
       metadataUri,
       explorer,
-      savedScenePath,
-      savedSceneFileName: sceneFileName,
       uploadedFileName: "scene.png",
       uploadedFileType: "image/png",
       savedAt: new Date(),
@@ -260,8 +247,6 @@ export async function POST(req: NextRequest) {
       imageUrl,
       metadataCID,
       metadataUri,
-      savedScenePath,
-      savedSceneFileName: sceneFileName,
     })
   } catch (error: any) {
     console.error("Scene capture-and-mint error:", error)

@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState, useRef } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera, Environment, Stars } from '@react-three/drei'
 import { useDrone } from '@/lib/drone-context'
@@ -35,6 +35,11 @@ function SceneRenderer() {
 function KeyboardControls() {
   const { setIMUData, takeoff, land, setCurrentScene, triggerButton, droneState } = useDrone()
   const keysPressed = useRef<Set<string>>(new Set())
+  const isFlyingRef = useRef(droneState.isFlying)
+
+  useEffect(() => {
+    isFlyingRef.current = droneState.isFlying
+  }, [droneState.isFlying])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -45,13 +50,13 @@ function KeyboardControls() {
 
       switch (key) {
         case ' ':
-          if (!droneState.isFlying) {
+          if (!isFlyingRef.current) {
             takeoff()
             triggerButton('takeoff')
           }
           break
         case 'shift':
-          if (droneState.isFlying) {
+          if (isFlyingRef.current) {
             land()
             triggerButton('land')
           }
@@ -107,7 +112,7 @@ function KeyboardControls() {
       window.removeEventListener('keyup', handleKeyUp)
       clearInterval(inputLoop)
     }
-  }, [setIMUData, takeoff, land, setCurrentScene, triggerButton, droneState.isFlying])
+  }, [setIMUData, takeoff, land, setCurrentScene, triggerButton])
 
   return null
 }
@@ -177,44 +182,23 @@ export function DroneViewport() {
 
   const { currentScene, droneState, addEventLog } = useDrone()
   const { generateWaypoints } = useGame()
-
-  // 1. HARDWARE TRIGGER LISTENER
-  useEffect(() => {
-    console.log("📡 Initializing Hardware Event Stream...")
-    const eventSource = new EventSource('/api/hardware/events')
-
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.action === 'capture') {
-          console.log("🔌 Hardware Signal Received: TRIGGERING CAPTURE")
-          // Check if canvas exists and we aren't already minting
-          const canvas = document.querySelector('canvas')
-          if (canvas && !isMinting) {
-            captureSceneAndMint(canvas)
-          } else {
-            console.warn("Capture ignored: Canvas not ready or already minting")
-          }
-        }
-      } catch (err) {
-        console.error("Failed to parse hardware event:", err)
-      }
-    }
-
-    eventSource.onerror = (err) => {
-      console.error("Hardware Stream Connection Error:", err)
-    }
-
-    return () => {
-      eventSource.close()
-    }
-  }, [isMinting]) // Dependencies ensure we have the correct minting state context
+  const isMintingRef = useRef(false)
+  const sceneRef = useRef(currentScene)
+  const droneStateRef = useRef(droneState)
 
   useEffect(() => {
-    generateWaypoints(currentScene)
-  }, [currentScene, generateWaypoints])
+    isMintingRef.current = isMinting
+  }, [isMinting])
 
-  async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  useEffect(() => {
+    sceneRef.current = currentScene
+  }, [currentScene])
+
+  useEffect(() => {
+    droneStateRef.current = droneState
+  }, [droneState])
+
+  const canvasToBlob = useCallback(async (canvas: HTMLCanvasElement): Promise<Blob> => {
     return await new Promise((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (!blob) {
@@ -224,9 +208,9 @@ export function DroneViewport() {
         resolve(blob)
       }, 'image/png')
     })
-  }
+  }, [])
 
-  async function captureSceneAndMint(canvas: HTMLCanvasElement) {
+  const captureSceneAndMint = useCallback(async (canvas: HTMLCanvasElement) => {
     try {
       setIsMinting(true)
       addEventLog('info', 'Capturing game scene for NFT mint')
@@ -251,17 +235,17 @@ export function DroneViewport() {
         'Captured during drone simulation building inspection'
       )
       formData.append('projectName', 'Drone Simulation')
-      formData.append('sceneName', currentScene)
-      formData.append('issueType', 'hardware-capture') // Updated to track hardware origin
+      formData.append('sceneName', sceneRef.current)
+      formData.append('issueType', 'hardware-capture')
       formData.append('capturedAt', new Date().toISOString())
 
-      formData.append('dronePosX', String(droneState.position.x))
-      formData.append('dronePosY', String(droneState.position.y))
-      formData.append('dronePosZ', String(droneState.position.z))
+      formData.append('dronePosX', String(droneStateRef.current.position.x))
+      formData.append('dronePosY', String(droneStateRef.current.position.y))
+      formData.append('dronePosZ', String(droneStateRef.current.position.z))
 
-      formData.append('droneRotPitch', String(droneState.rotation.pitch))
-      formData.append('droneRotRoll', String(droneState.rotation.roll))
-      formData.append('droneRotYaw', String(droneState.rotation.yaw))
+      formData.append('droneRotPitch', String(droneStateRef.current.rotation.pitch))
+      formData.append('droneRotRoll', String(droneStateRef.current.rotation.roll))
+      formData.append('droneRotYaw', String(droneStateRef.current.rotation.yaw))
 
       console.log('🚀 Sending scene.png to /api/scene/capture-and-mint')
 
@@ -279,14 +263,53 @@ export function DroneViewport() {
       addEventLog('success', 'NFT minted successfully')
       addEventLog('info', `Mint: ${result.mintAddress}`)
       console.log('✅ NFT MINT SUCCESS:', result.explorer)
-
     } catch (error: any) {
       console.error('❌ Failed to capture and mint scene:', error)
       addEventLog('error', error?.message || 'Failed to capture and mint scene')
     } finally {
       setIsMinting(false)
     }
-  }
+  }, [addEventLog, canvasToBlob])
+
+  // Hardware trigger listener
+  useEffect(() => {
+    console.log("📡 Initializing Hardware Event Stream...")
+    const eventSource = new EventSource('/api/hardware/events')
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.action === 'capture') {
+          console.log("🔌 Hardware Signal Received: TRIGGERING CAPTURE")
+          const canvas = document.querySelector('canvas')
+          if (canvas && !isMintingRef.current) {
+            captureSceneAndMint(canvas)
+          } else {
+            console.warn("Capture ignored: Canvas not ready or already minting")
+          }
+        }
+      } catch (err) {
+        console.error("Failed to parse hardware event:", err)
+      }
+    }
+
+    eventSource.onerror = (err) => {
+      console.error("Hardware Stream Connection Error:", err)
+    }
+
+    return () => {
+      eventSource.close()
+    }
+  }, [captureSceneAndMint])
+
+  useEffect(() => {
+    generateWaypoints(currentScene)
+  }, [currentScene, generateWaypoints])
+
+  const dpr = useMemo(() => {
+    if (typeof window === 'undefined') return 1
+    return Math.min(window.devicePixelRatio || 1, 1.5)
+  }, [])
 
   const cameraModes: { mode: CameraMode; icon: React.ReactNode; label: string }[] = [
     { mode: 'follow', icon: <Video className="w-4 h-4" />, label: 'Follow' },
@@ -302,6 +325,7 @@ export function DroneViewport() {
       <Canvas
         shadows
         gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
+        dpr={dpr}
         className="w-full h-full"
         onCreated={({ gl }) => {
           console.log('🎨 Canvas ready:', gl.domElement)

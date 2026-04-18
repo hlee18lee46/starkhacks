@@ -1,6 +1,6 @@
 'use client'
 
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import type { 
   IMUData, 
   ButtonState, 
@@ -104,18 +104,20 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const takeoff = useCallback(() => {
-    if (!droneState.isFlying) {
-      setDroneState(prev => ({ ...prev, isFlying: true }))
+    setDroneState(prev => {
+      if (prev.isFlying) return prev
       addEventLog('success', 'Drone takeoff initiated')
-    }
-  }, [droneState.isFlying, addEventLog])
+      return { ...prev, isFlying: true }
+    })
+  }, [addEventLog])
 
   const land = useCallback(() => {
-    if (droneState.isFlying) {
-      setDroneState(prev => ({ ...prev, isFlying: false }))
+    setDroneState(prev => {
+      if (!prev.isFlying) return prev
       addEventLog('info', 'Drone landing sequence started')
-    }
-  }, [droneState.isFlying, addEventLog])
+      return { ...prev, isFlying: false }
+    })
+  }, [addEventLog])
 
   const resetDrone = useCallback(() => {
     setDroneState(initialDroneState)
@@ -191,6 +193,11 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
   // Use ref to track accumulated yaw and velocity
   const yawAccumulatorRef = useRef(0)
   const velocityRef = useRef({ x: 0, y: 0, z: 0 })
+  const imuDataRef = useRef(imuData)
+
+  useEffect(() => {
+    imuDataRef.current = imuData
+  }, [imuData])
   
   // Physics constants
   const PHYSICS = {
@@ -207,15 +214,16 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (droneState.isFlying) {
       const updateInterval = setInterval(() => {
-        const dt = 0.016 // ~60fps
+        const dt = 0.033 // ~30fps
+        const currentImu = imuDataRef.current
         
         // Accumulate yaw rotation
-        yawAccumulatorRef.current = (yawAccumulatorRef.current + imuData.yaw * PHYSICS.yawSpeed * dt) % 360
+        yawAccumulatorRef.current = (yawAccumulatorRef.current + currentImu.yaw * PHYSICS.yawSpeed * dt) % 360
         if (yawAccumulatorRef.current < 0) yawAccumulatorRef.current += 360
         
         setDroneState(prev => {
-          const pitchFactor = imuData.pitch / 25
-          const rollFactor = imuData.roll / 25
+          const pitchFactor = currentImu.pitch / 25
+          const rollFactor = currentImu.roll / 25
           
           // Calculate movement based on yaw direction
           const yawRad = (yawAccumulatorRef.current * Math.PI) / 180
@@ -245,7 +253,7 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
           velocityRef.current.z *= PHYSICS.drag
           
           // Vertical movement based on throttle (accelZ)
-          const throttle = (imuData.accelZ - PHYSICS.gravity) / 3
+          const throttle = (currentImu.accelZ - PHYSICS.gravity) / 3
           velocityRef.current.y += throttle * PHYSICS.climbRate * dt
           velocityRef.current.y *= 0.95 // Vertical drag
           
@@ -265,8 +273,8 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
             ...prev,
             position: newPosition,
             rotation: {
-              pitch: imuData.pitch * 0.6,
-              roll: imuData.roll * 0.6,
+              pitch: currentImu.pitch * 0.6,
+              roll: currentImu.roll * 0.6,
               yaw: yawAccumulatorRef.current
             },
             velocity: { ...velocityRef.current },
@@ -274,7 +282,7 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
             speed
           }
         })
-      }, 16)
+      }, 33)
 
       return () => clearInterval(updateInterval)
     } else {
@@ -287,15 +295,15 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
           }
           return {
             ...prev,
-            altitude: Math.max(0, prev.altitude - 0.08),
-            position: { ...prev.position, y: Math.max(0, prev.position.y - 0.08) }
+            altitude: Math.max(0, prev.altitude - 0.16),
+            position: { ...prev.position, y: Math.max(0, prev.position.y - 0.16) }
           }
         })
-      }, 16)
+      }, 33)
 
       return () => clearInterval(landInterval)
     }
-  }, [droneState.isFlying, imuData])
+  }, [droneState.isFlying])
 
   // Log initial connection
   useEffect(() => {
@@ -303,7 +311,7 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
     addEventLog('info', 'Mock hardware input active')
   }, [addEventLog])
 
-  const value: DroneContextType = {
+  const value: DroneContextType = useMemo(() => ({
     imuData,
     buttonState,
     droneState,
@@ -320,7 +328,24 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
     takeoff,
     land,
     setInputSource
-  }
+  }), [
+    imuData,
+    buttonState,
+    droneState,
+    connectionStatus,
+    gestureStatus,
+    eventLogs,
+    currentScene,
+    inputSource,
+    setIMUData,
+    triggerButton,
+    setCurrentScene,
+    addEventLog,
+    resetDrone,
+    takeoff,
+    land,
+    setInputSource
+  ])
 
   return (
     <DroneContext.Provider value={value}>
