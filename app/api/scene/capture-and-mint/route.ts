@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 import axios from "axios"
 import FormData from "form-data"
 import bs58 from "bs58"
+import fs from "fs"
+import path from "path"
+import os from "os"
 import clientPromise from "@/lib/mongodb"
 
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults"
@@ -30,9 +33,8 @@ export async function POST(req: NextRequest) {
     const symbol = (form.get("symbol") as string | null) || "DRONE"
     const description =
       (form.get("description") as string | null) ||
-      "Photo captured during drone simulation building inspection"
+      "Captured during drone simulation building inspection"
 
-    // Drone simulation specific metadata
     const projectName =
       (form.get("projectName") as string | null) || "Drone Simulation"
     const missionId = (form.get("missionId") as string | null) || null
@@ -43,7 +45,6 @@ export async function POST(req: NextRequest) {
     const capturedAt =
       (form.get("capturedAt") as string | null) || new Date().toISOString()
 
-    // Optional simulation position / rotation info
     const dronePosX = (form.get("dronePosX") as string | null) || null
     const dronePosY = (form.get("dronePosY") as string | null) || null
     const dronePosZ = (form.get("dronePosZ") as string | null) || null
@@ -92,14 +93,23 @@ export async function POST(req: NextRequest) {
 
     const normalizedGateway = pinataGateway.replace(/\/+$/, "")
 
-    // 1) Upload image to Pinata
+    // 1) Save uploaded screenshot as scene.png on server
     const imageBytes = await imageFile.arrayBuffer()
     const imageBuffer = Buffer.from(imageBytes)
 
+    const screenshotsDir = path.join(os.tmpdir(), "drone-scene-captures")
+    fs.mkdirSync(screenshotsDir, { recursive: true })
+
+    const sceneFileName = `scene-${Date.now()}.png`
+    const savedScenePath = path.join(screenshotsDir, sceneFileName)
+
+    fs.writeFileSync(savedScenePath, imageBuffer)
+
+    // 2) Upload saved scene.png to Pinata
     const pinataFileForm = new FormData()
-    pinataFileForm.append("file", imageBuffer, {
-      filename: imageFile.name || "drone-inspection.png",
-      contentType: imageFile.type || "application/octet-stream",
+    pinataFileForm.append("file", fs.createReadStream(savedScenePath), {
+      filename: "scene.png",
+      contentType: "image/png",
     })
 
     const pinataFileResponse = await axios.post(
@@ -117,7 +127,7 @@ export async function POST(req: NextRequest) {
     const imageCID = pinataFileResponse.data.IpfsHash
     const imageUrl = `${normalizedGateway}/${imageCID}`
 
-    // 2) Build NFT metadata JSON
+    // 3) Build metadata
     const nftAttributes = [
       { trait_type: "project", value: projectName },
       { trait_type: "capturedAt", value: capturedAt },
@@ -154,14 +164,14 @@ export async function POST(req: NextRequest) {
         files: [
           {
             uri: imageUrl,
-            type: imageFile.type || "image/png",
+            type: "image/png",
           },
         ],
         category: "image",
       },
     }
 
-    // 3) Upload metadata JSON to Pinata
+    // 4) Upload metadata JSON
     const pinataMetadataResponse = await axios.post(
       "https://api.pinata.cloud/pinning/pinJSONToIPFS",
       metadata,
@@ -176,7 +186,7 @@ export async function POST(req: NextRequest) {
     const metadataCID = pinataMetadataResponse.data.IpfsHash
     const metadataUri = `${normalizedGateway}/${metadataCID}`
 
-    // 4) Mint NFT on Solana
+    // 5) Mint NFT
     const secretKey = bs58.decode(solanaPrivateKey)
 
     const umi = createUmi(rpcUrl).use(mplTokenMetadata())
@@ -198,9 +208,9 @@ export async function POST(req: NextRequest) {
     const signature = bs58.encode(mintResult.signature)
     const explorer = `https://explorer.solana.com/address/${mintAddress}?cluster=devnet`
 
-    // 5) Save record in MongoDB
+    // 6) Save to Mongo
     const mongoClient = await clientPromise
-    const db = mongoClient.db("drone")
+    const db = mongoClient.db("sprout")
     const mintedCollection = db.collection("mintednfts")
 
     await mintedCollection.insertOne({
@@ -232,14 +242,16 @@ export async function POST(req: NextRequest) {
       metadataCID,
       metadataUri,
       explorer,
-      uploadedFileName: imageFile.name || "drone-inspection.png",
-      uploadedFileType: imageFile.type || "application/octet-stream",
+      savedScenePath,
+      savedSceneFileName: sceneFileName,
+      uploadedFileName: "scene.png",
+      uploadedFileType: "image/png",
       savedAt: new Date(),
     })
 
     return NextResponse.json({
       ok: true,
-      message: "Drone inspection NFT minted successfully",
+      message: "Scene captured and NFT minted successfully",
       recipientWallet,
       mintAddress,
       signature,
@@ -248,14 +260,16 @@ export async function POST(req: NextRequest) {
       imageUrl,
       metadataCID,
       metadataUri,
+      savedScenePath,
+      savedSceneFileName: sceneFileName,
     })
   } catch (error: any) {
-    console.error("Drone NFT mint error:", error)
+    console.error("Scene capture-and-mint error:", error)
 
     return NextResponse.json(
       {
         ok: false,
-        error: error?.message || "NFT mint failed",
+        error: error?.message || "Scene capture-and-mint failed",
         details: error?.response?.data || null,
       },
       { status: 500 }

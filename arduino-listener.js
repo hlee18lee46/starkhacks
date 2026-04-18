@@ -6,7 +6,7 @@ import FormData from "form-data"
 
 // ⚠️ CHANGE THIS PORT
 const port = new SerialPort({
-    path: "/dev/cu.usbmodem13101",
+    path: "/dev/cu.usbmodem1101",
   baudRate: 9600,
 })
 
