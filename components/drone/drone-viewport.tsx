@@ -178,6 +178,38 @@ export function DroneViewport() {
   const { currentScene, droneState, addEventLog } = useDrone()
   const { generateWaypoints } = useGame()
 
+  // 1. HARDWARE TRIGGER LISTENER
+  useEffect(() => {
+    console.log("📡 Initializing Hardware Event Stream...")
+    const eventSource = new EventSource('/api/hardware/events')
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.action === 'capture') {
+          console.log("🔌 Hardware Signal Received: TRIGGERING CAPTURE")
+          // Check if canvas exists and we aren't already minting
+          const canvas = document.querySelector('canvas')
+          if (canvas && !isMinting) {
+            captureSceneAndMint(canvas)
+          } else {
+            console.warn("Capture ignored: Canvas not ready or already minting")
+          }
+        }
+      } catch (err) {
+        console.error("Failed to parse hardware event:", err)
+      }
+    }
+
+    eventSource.onerror = (err) => {
+      console.error("Hardware Stream Connection Error:", err)
+    }
+
+    return () => {
+      eventSource.close()
+    }
+  }, [isMinting]) // Dependencies ensure we have the correct minting state context
+
   useEffect(() => {
     generateWaypoints(currentScene)
   }, [currentScene, generateWaypoints])
@@ -220,7 +252,7 @@ export function DroneViewport() {
       )
       formData.append('projectName', 'Drone Simulation')
       formData.append('sceneName', currentScene)
-      formData.append('issueType', 'manual-capture')
+      formData.append('issueType', 'hardware-capture') // Updated to track hardware origin
       formData.append('capturedAt', new Date().toISOString())
 
       formData.append('dronePosX', String(droneState.position.x))
@@ -240,26 +272,14 @@ export function DroneViewport() {
 
       const result = await response.json()
 
-      console.log('🧾 FULL CAPTURE-AND-MINT RESULT:', result)
-      console.log('🧾 FULL RESULT JSON:\n', JSON.stringify(result, null, 2))
-
       if (!response.ok || !result.ok) {
-        console.error('❌ Capture-and-mint failed:', result)
         throw new Error(result?.error || 'Capture-and-mint failed')
       }
 
-      console.log('✅ NFT MINT SUCCESS')
-      console.log('Mint Address:', result.mintAddress)
-      console.log('Signature:', result.signature)
-      console.log('Explorer:', result.explorer)
-      console.log('Image URL:', result.imageUrl)
-      console.log('Metadata URI:', result.metadataUri)
-      console.log('Saved Scene Path:', result.savedScenePath)
-
       addEventLog('success', 'NFT minted successfully')
       addEventLog('info', `Mint: ${result.mintAddress}`)
-      addEventLog('info', `Explorer: ${result.explorer}`)
-      addEventLog('info', `Image: ${result.imageUrl}`)
+      console.log('✅ NFT MINT SUCCESS:', result.explorer)
+
     } catch (error: any) {
       console.error('❌ Failed to capture and mint scene:', error)
       addEventLog('error', error?.message || 'Failed to capture and mint scene')
@@ -317,13 +337,7 @@ export function DroneViewport() {
           size="sm"
           disabled={!sceneCanvas || isMinting}
           onClick={() => {
-            if (!sceneCanvas) {
-              console.log('❌ No canvas yet')
-              addEventLog('error', 'No canvas available yet')
-              return
-            }
-
-            captureSceneAndMint(sceneCanvas)
+            if (sceneCanvas) captureSceneAndMint(sceneCanvas)
           }}
         >
           {isMinting ? 'Minting...' : 'Capture & Mint'}
@@ -332,6 +346,7 @@ export function DroneViewport() {
 
       <KeyboardControls />
 
+      {/* Decorative Overlays */}
       <div className="absolute top-0 left-0 w-12 h-12 border-l-2 border-t-2 border-primary/50 pointer-events-none" />
       <div className="absolute top-0 right-0 w-12 h-12 border-r-2 border-t-2 border-primary/50 pointer-events-none" />
       <div className="absolute bottom-0 left-0 w-12 h-12 border-l-2 border-b-2 border-primary/50 pointer-events-none" />
