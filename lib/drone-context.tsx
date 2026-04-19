@@ -252,7 +252,7 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
 
             const adjustedIMU: IMUData = {
               pitch,
-              roll,
+              roll: -roll,
               yaw: yaw - yawOffsetRef.current,
               accelZ,
               accelX: 0,
