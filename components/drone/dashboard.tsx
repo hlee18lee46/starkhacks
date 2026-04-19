@@ -11,7 +11,7 @@ import { ControlPanel } from './control-panel'
 import { ControlInstructions } from './control-instructions'
 import { EventLog } from './event-log'
 import { Plane } from 'lucide-react'
-
+import Link from "next/link"
 // Dynamic import for the 3D viewport to avoid SSR issues
 const DroneViewport = dynamic(
   () => import('./drone-viewport').then(mod => ({ default: mod.DroneViewport })),
@@ -44,6 +44,12 @@ export function Dashboard() {
             <p className="text-xs text-muted-foreground">Advanced Simulation Dashboard v1.0</p>
           </div>
         </div>
+            <Link
+      href="/scene"
+      className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90"
+    >
+      Inspection NFTScene
+    </Link>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">System Status:</span>
           <span className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-success/20 text-success text-xs font-medium">
