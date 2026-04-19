@@ -11,7 +11,7 @@ import type {
   SceneType,
   HardwareInputSource
 } from './drone-types'
-import { io, type Socket } from 'socket.io-client'
+import { io } from 'socket.io-client'
 
 interface DroneContextType {
   imuData: IMUData
@@ -78,12 +78,13 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
   const [currentScene, setCurrentSceneState] = useState<SceneType>('urban')
   const [inputSource, setInputSourceState] = useState<HardwareInputSource>({ type: 'mock' })
 
-  const serialReaderRef = useRef<ReadableStreamDefaultReader | null>(null)
+  const serialReaderRef = useRef<ReadableStreamDefaultReader<string> | null>(null)
   const serialPortRef = useRef<SerialPort | null>(null)
   const lastButtonStateRef = useRef<ButtonState>(initialButtonState)
   const velocityRef = useRef({ x: 0, y: 0, z: 0 })
   const imuDataRef = useRef(initialIMUData)
   const yawOffsetRef = useRef(0)
+  const rubikPiSocketRef = useRef<ReturnType<typeof io> | null>(null)
 
   const PHYSICS = {
     maxSpeed: 12,
@@ -162,10 +163,12 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
   const setInputSource = useCallback(async (source: HardwareInputSource) => {
     if (serialReaderRef.current) {
       await serialReaderRef.current.cancel().catch(() => {})
+      serialReaderRef.current = null
     }
 
     if (serialPortRef.current) {
       await serialPortRef.current.close().catch(() => {})
+      serialPortRef.current = null
     }
 
     setInputSourceState(source)
@@ -184,7 +187,7 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
         addEventLog('success', 'Hardware online')
 
         const decoder = new TextDecoderStream()
-        port.readable?.pipeTo(decoder.writable)
+        port.readable?.pipeTo(decoder.writable).catch(() => {})
         const reader = decoder.readable.getReader()
         serialReaderRef.current = reader
 
@@ -193,6 +196,7 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
         while (true) {
           const { value, done } = await reader.read()
           if (done) break
+          if (!value) continue
 
           buffer += value
           const lines = buffer.split('\n')
@@ -201,6 +205,7 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
           for (const rawLine of lines) {
             const line = rawLine.trim()
             if (!line) continue
+
             if (line === 'CALIBRATED') {
               addEventLog('info', 'Hardware calibration completed')
               continue
@@ -278,6 +283,7 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } catch (err) {
+        console.error('serial connection failed', err)
         setConnectionStatus({
           imu: 'disconnected',
           buttons: 'disconnected',
@@ -293,6 +299,68 @@ export function DroneProvider({ children }: { children: React.ReactNode }) {
       })
     }
   }, [addEventLog, takeoff, land, resetDrone, droneState.isFlying])
+
+  useEffect(() => {
+    const socket = io('http://192.168.2.3:5050', {
+      transports: ['polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
+    })
+
+    rubikPiSocketRef.current = socket
+
+    socket.on('connect', () => {
+      console.log('✅ connected to RubikPi socket:', socket.id)
+      addEventLog('success', 'Connected to RubikPi gesture server')
+    })
+
+    socket.on('disconnect', (reason) => {
+      console.log('❌ disconnected from RubikPi socket:', reason)
+      addEventLog('info', `Disconnected from RubikPi gesture server: ${reason}`)
+    })
+
+    socket.on('connect_error', (err) => {
+      console.log('⚠️ socket connect error:', err?.message || err)
+      addEventLog('error', 'Failed to connect to RubikPi gesture server')
+    })
+
+    socket.onAny((event, ...args) => {
+      console.log('📡 socket event received:', event, args)
+    })
+
+    socket.on('gesture', (data: any) => {
+      console.log('🔥 gesture payload:', data)
+
+      const gestureName = String(data?.gesture || '').trim().toLowerCase()
+      const confidenceValue = Number(data?.confidence ?? 1)
+
+      if (gestureName === 'fist') {
+        setGestureStatus({
+          detected: true,
+          gesture: 'Fist',
+          confidence: Number.isFinite(confidenceValue) ? confidenceValue : 1
+        })
+
+        console.log('💧 dispatching DRONE_FIRE_WATER')
+        window.dispatchEvent(new Event('DRONE_FIRE_WATER'))
+        addEventLog('success', 'Fist detected → water throw triggered')
+        return
+      }
+
+      setGestureStatus({
+        detected: false,
+        gesture: 'None',
+        confidence: 0
+      })
+    })
+
+    return () => {
+      socket.removeAllListeners()
+      socket.disconnect()
+      rubikPiSocketRef.current = null
+    }
+  }, [addEventLog])
 
   useEffect(() => {
     const updateInterval = setInterval(() => {
